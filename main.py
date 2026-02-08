@@ -1,271 +1,240 @@
+# ===================== IMPORTS =====================
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import time as tlib
+import plotly.graph_objects as go
 from datetime import datetime, time
 import pytz
-import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="IntradayPulse Pro", layout="wide", initial_sidebar_state="expanded")
+# ===================== PAGE CONFIG =====================
+st.set_page_config(
+    page_title="DKC Intraday Pulse",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Initialize Session State
-if 'last_update' not in st.session_state:
-    st.session_state['last_update'] = datetime.now().strftime('%H:%M:%S')
+# ===================== MARKET STATUS =====================
+def market_live():
+    tz = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(tz)
+    return now.weekday() < 5 and time(9,15) <= now.time() <= time(15,30)
 
-# --- 2. SUPER PREMIUM CSS (BOLD & DARK) ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    
-    html, body, .stApp { background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
-    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e5e7eb; }
-    
-    /* LOGO */
-    .logo-container { display: flex; align-items: center; margin-bottom: 25px; }
-    .logo-icon {
-        background: #2563eb; color: white; width: 40px; height: 40px; border-radius: 8px;
-        display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; margin-right: 12px;
-    }
-    .logo-text { font-size: 19px; font-weight: 800; color: #111827; letter-spacing: -0.5px; }
-    
-    /* MARKET STATUS PILL */
-    .status-pill {
-        padding: 6px 15px; border-radius: 6px; font-size: 11px; font-weight: 700;
-        display: block; margin-bottom: 20px; width: 100%; text-align: center;
-        text-transform: uppercase; letter-spacing: 0.5px;
-    }
-    
-    /* METRICS STRIP */
-    .metric-row { display: flex; gap: 15px; margin-bottom: 20px; }
-    .metric-box {
-        background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 15px;
-        flex: 1; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .m-label { font-size: 11px; color: #6b7280; font-weight: 700; text-transform: uppercase; margin-bottom: 5px; }
-    .m-val { font-size: 20px; font-weight: 800; color: #1f2937; }
-    
-    /* HEADERS */
-    .header-card {
-        background: white; padding: 15px 20px; border-radius: 8px 8px 0 0;
-        display: flex; justify-content: space-between; align-items: center;
-        margin-top: 20px; border-bottom: 1px solid #f0f0f0;
-        box-shadow: 0 -2px 5px rgba(0,0,0,0.02);
-    }
-    .h-green { border-top: 4px solid #10b981; }
-    .h-red { border-top: 4px solid #ef4444; }
-    .h-blue { border-top: 4px solid #3b82f6; }
-    .h-title { font-weight: 800; color: #374151; font-size: 14px; text-transform: uppercase; }
-    .live-badge { background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 8px; }
+IS_LIVE = market_live()
 
-    /* DATAFRAME STYLING (The "Gahra Kala" Look) */
-    div[data-testid="stDataFrame"] {
-        background: white; padding: 0 20px 20px 20px; border-radius: 0 0 8px 8px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-    }
-    div[data-testid="stDataFrame"] table {
-        color: #111827 !important; font-weight: 600 !important; font-size: 14px !important;
-    }
-    
-    /* OI CARDS */
-    .oi-card { padding: 15px; border-radius: 10px; color: white; text-align: center; margin-bottom: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-    .oi-red { background: linear-gradient(135deg, #ef4444, #b91c1c); }
-    .oi-green { background: linear-gradient(135deg, #10b981, #047857); }
-    .oi-lbl { font-size: 11px; font-weight: 700; opacity: 0.9; text-transform: uppercase; }
-    .oi-big { font-size: 22px; font-weight: 800; margin: 4px 0; }
-    
-    /* SECTOR CARDS */
-    .sector-card { background: white; padding: 10px; border-radius: 6px; border: 1px solid #e5e7eb; text-align: center; margin-bottom: 10px; }
-    .sec-name { color: #6b7280; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
-
-    /* BUTTONS */
-    div.stButton > button { width: 100%; background-color: #f9fafb; border: 1px solid #d1d5db; color: #374151; font-weight: 600; border-radius: 6px; }
-    div.stButton > button:hover { background-color: #2563eb; color: white; border-color: #2563eb; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 3. HELPER FUNCTIONS ---
-
-def get_market_status():
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
-    if now.weekday() < 5 and (time(9,15) <= now.time() <= time(15,30)):
-        return '<div class="status-pill" style="background:#dcfce7; color:#16a34a; border:1px solid #86efac;">● MARKET OPEN</div>'
-    return '<div class="status-pill" style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5;">● MARKET CLOSED</div>'
-
-def color_signals(val):
-    s = str(val).lower()
-    if any(x in s for x in ['buy', 'bull', 'up', 'high', 'puller', 'support', '↗', '📈']): return 'color: #10b981; font-weight: 800;'
-    if any(x in s for x in ['sell', 'bear', 'down', 'low', 'dragger', 'resist', '↘', '📉']): return 'color: #ef4444; font-weight: 800;'
-    if 'x' in s: return 'color: #2563eb; font-weight: 800;'
-    return 'color: #111827; font-weight: 700;'
-
-@st.cache_data(ttl=5)
-def fetch_data(tickers):
-    # Fetching 5m interval to get intraday timestamps
-    try: return yf.download(tickers, period="5d", interval="5m", group_by='ticker', progress=False)
-    except: return None
-
-# --- 4. SIDEBAR ---
-with st.sidebar:
-    st.markdown("""
-        <div class="logo-container">
-            <div class="logo-icon">↗</div>
-            <div class="logo-text">Intraday<br>Pulse</div>
-        </div>
-    """, unsafe_allow_html=True)
-    st.markdown(get_market_status(), unsafe_allow_html=True)
-    if st.button("🔄 REFRESH DATA"):
-        st.session_state['last_update'] = datetime.now().strftime('%H:%M:%S')
-        st.rerun()
-    st.markdown("---")
-    menu_options = ["Market Wise", "Option Clock", "Trade Flow", "Stock-On", "Swing Spectrum", "TradeX", "Trade Brahmand", "Index Mover"]
-    view = st.radio("NAVIGATION", menu_options, index=0, label_visibility="collapsed")
-    st.markdown("---")
-    auto_ref = st.checkbox("Auto Refresh", value=True)
-    refresh_rate = st.slider("Speed (s)", 5, 60, 30) if auto_ref else 30
-
-# --- 5. DATA ENGINE ---
-ALL_TICKERS = [
-    "^NSEI", "^NSEBANK", "^INDIAVIX",
-    "TECHNOE.NS", "RRKABEL.NS", "PFC.NS", "NTPC.NS", "MEDANTA.NS", "DELHIVERY.NS", "CONCOR.NS", "CGPOWER.NS", "BIOCON.NS", "BALRAMCHIN.NS",
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "TRIDENT.NS", "TITAGARH.NS", "SOLARINDS.NS", "RVNL.NS", "RITES.NS", "RAILTEL.NS", "NUVAMA.NS"
+# ===================== STOCK LIST =====================
+STOCKS = [
+    "RELIANCE.NS","TCS.NS","HDFCBANK.NS","ICICIBANK.NS","INFY.NS",
+    "SBIN.NS","ITC.NS","LT.NS","BHARTIARTL.NS","TATAMOTORS.NS",
+    "AXISBANK.NS","MARUTI.NS","ADANIENT.NS","BAJFINANCE.NS","WIPRO.NS"
 ]
 
-data = fetch_data(ALL_TICKERS)
+# ===================== CSS =====================
+st.markdown("""
+<style>
+html,body,.stApp{background:#f8fafc;font-family:Arial}
+[data-testid="stSidebar"]{background:#ffffff;border-right:1px solid #e5e7eb}
+.badge{display:inline-block;padding:4px 10px;border-radius:20px;
+font-size:10px;font-weight:700;margin-top:6px}
+.live{background:#dcfce7;color:#166534}
+.closed{background:#fee2e2;color:#991b1b}
+div[data-testid="stDataFrame"]{
+    background:white;border-radius:10px;border:1px solid #e5e7eb
+}
+</style>
+""", unsafe_allow_html=True)
 
-def get_idx(sym):
+# ===================== SIDEBAR =====================
+with st.sidebar:
+    st.markdown("### DKC Intraday Pulse")
+    st.caption("Trading Dashboard")
+
+    st.markdown(
+        f"<span class='badge {'live' if IS_LIVE else 'closed'}'>"
+        f"● {'LIVE MARKET' if IS_LIVE else 'MARKET CLOSED'}</span>",
+        unsafe_allow_html=True
+    )
+
+    st.markdown("---")
+
+    MENU = st.radio(
+        "MENU",
+        [
+            "Market Wise",
+            "Trade Flow",
+            "TradeX (Live Signals)",
+            "Stock-On",
+            "Swing Spectrum",
+            "Option Clock",
+            "Index Mover"
+        ],
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+
+    if st.button("🔁 Manual Refresh"):
+        st.cache_data.clear()
+        st.experimental_rerun()
+
+    AUTO = st.checkbox("⚡ Auto Refresh", value=True)
+    INTERVAL = st.slider("Seconds", 5, 60, 15)
+
+# ===================== DATA FETCH =====================
+@st.cache_data(ttl=60)
+def fetch_data():
+    return yf.download(
+        tickers=STOCKS,
+        period="5d",
+        interval="1m",
+        group_by="ticker",
+        progress=False,
+        threads=True
+    )
+
+def calculate_metrics(data, symbol):
     try:
-        df = data[sym].dropna()
-        return df.iloc[-1]['Close'], ((df.iloc[-1]['Close']-df.iloc[-2]['Close'])/df.iloc[-2]['Close'])*100
-    except: return 0.0, 0.0
+        if symbol not in data.columns.levels[0]:
+            return None
 
-# --- 6. TOP STRIP ---
-if view in ["Market Wise", "Option Clock", "Index Mover"]:
-    n_ltp, n_chg = get_idx("^NSEI")
-    b_ltp, b_chg = get_idx("^NSEBANK")
-    v_ltp, v_chg = get_idx("^INDIAVIX")
-    pcr = 0.95 + (n_chg/10)
-    st.markdown(f"""
-    <div class="metric-row">
-        <div class="metric-box"><div class="m-label">NIFTY 50</div><div class="m-val">{n_ltp:.0f}</div><div style="color:{'#10b981' if n_chg>=0 else '#ef4444'};font-weight:700;">{n_chg:+.2f}%</div></div>
-        <div class="metric-box"><div class="m-label">BANK NIFTY</div><div class="m-val">{b_ltp:.0f}</div><div style="color:{'#10b981' if b_chg>=0 else '#ef4444'};font-weight:700;">{b_chg:+.2f}%</div></div>
-        <div class="metric-box"><div class="m-label">INDIA VIX</div><div class="m-val">{v_ltp:.2f}</div><div style="color:{'#ef4444' if v_chg>=0 else '#10b981'};font-weight:700;">{v_chg:+.2f}%</div></div>
-        <div class="metric-box"><div class="m-label">PCR RATIO</div><div class="m-val">{pcr:.2f}</div><div style="color:{'#10b981' if pcr>1 else '#ef4444'};font-weight:700;">{'BULLISH' if pcr>1 else 'BEARISH'}</div></div>
-    </div>""", unsafe_allow_html=True)
+        df = data[symbol].dropna()
+        if len(df) < 2:
+            return None
 
-# --- 7. MAIN MODULES ---
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-if view == "Market Wise":
-    gainers, losers = [], []
-    if data is not None:
-        for t in ALL_TICKERS:
-            if "^" in t: continue
-            try:
-                df = data[t].dropna()
-                if df.empty: continue
-                
-                # --- ACTUAL MARKET TIME LOGIC ---
-                last_row = df.iloc[-1]
-                prev_row = df.iloc[-2]
-                
-                # Fetching actual trade time from index
-                trade_time = df.index[-1].strftime('%H:%M:%S')
-                
-                ltp = float(last_row['Close'])
-                prev = float(prev_row['Close'])
-                chg = ((ltp - prev)/prev)*100
-                
-                sig = "↗" if chg > 0 else "↘"
-                chart_icon = "📈" if chg > 0 else "📉"
-                
-                avg_vol = df['Volume'].tail(5).mean()
-                vol_curr = last_row['Volume']
-                xf = round(vol_curr/avg_vol, 2) if avg_vol > 0 else 0.0
-                
-                row = {"SYMBOL": t.replace(".NS",""), "CHART": chart_icon, "LTP": ltp, "%CHANGE": chg/100, "X FACTOR": f"{xf}x", "SIGNAL": sig, "TIME": trade_time}
-                if chg >= 0: gainers.append(row)
-                else: losers.append(row)
-            except: continue
+        ltp = float(last["Close"])
+        chg = ((ltp - prev["Close"]) / prev["Close"]) * 100
+        vol_avg = df["Volume"].mean() or 1
+        xf = last["Volume"] / vol_avg
+        confidence = min(100, abs(chg) * 30 + xf * 15)
 
-    st.markdown(f'<div class="header-card h-green"><span class="h-title">MARKET WISE GAINERS</span><span class="live-badge">LIVE</span></div>', unsafe_allow_html=True)
-    if gainers:
-        df_g = pd.DataFrame(gainers).sort_values(by="%CHANGE", ascending=False).head(10)
-        st.dataframe(df_g.style.map(color_signals, subset=['SIGNAL', 'X FACTOR', 'CHART', 'SYMBOL']), use_container_width=True, hide_index=True, 
-                     column_config={
-                         "SYMBOL": st.column_config.TextColumn("Symbol", width="medium"),
-                         "CHART": st.column_config.TextColumn("Trend", width="small"),
-                         "LTP": st.column_config.NumberColumn("LTP", format="₹ %.2f"), 
-                         "%CHANGE": st.column_config.NumberColumn("% Change", format="%.2f %%"),
-                         "TIME": st.column_config.TextColumn("Trade Time", width="small") # New Real Time Column
-                     })
+        return {
+            "SYMBOL": symbol.replace(".NS",""),
+            "LTP": ltp,
+            "CHANGE": chg,
+            "VOL": int(last["Volume"]),
+            "X_FACTOR": f"{xf:.2f}x",
+            "CONFIDENCE": round(confidence,1),
+            "TIME": last.name.strftime("%H:%M")
+        }
+    except:
+        return None
 
-    st.markdown(f'<div class="header-card h-red"><span class="h-title">MARKET WISE LOSERS</span><span class="live-badge">LIVE</span></div>', unsafe_allow_html=True)
-    if losers:
-        df_l = pd.DataFrame(losers).sort_values(by="%CHANGE", ascending=True).head(10)
-        st.dataframe(df_l.style.map(color_signals, subset=['SIGNAL', 'X FACTOR', 'CHART', 'SYMBOL']), use_container_width=True, hide_index=True, 
-                     column_config={
-                         "SYMBOL": st.column_config.TextColumn("Symbol", width="medium"),
-                         "CHART": st.column_config.TextColumn("Trend", width="small"),
-                         "LTP": st.column_config.NumberColumn("LTP", format="₹ %.2f"), 
-                         "%CHANGE": st.column_config.NumberColumn("% Change", format="%.2f %%"),
-                         "TIME": st.column_config.TextColumn("Trade Time", width="small")
-                     })
+# ===================== MAIN DATA =====================
+data = fetch_data()
+rows = []
 
-elif view == "Option Clock":
-    st.markdown(f'<div class="header-card h-green"><span class="h-title">OPTION CHAIN CLOCK</span></div>', unsafe_allow_html=True)
-    col_table, col_cards = st.columns([3, 1])
-    with col_cards:
-        fig = go.Figure(go.Indicator(mode = "gauge+number", value = 0.66, title = {'text': "PCR Sentiment"}, gauge = {'axis': {'range': [0, 2]}, 'bar': {'color': "#ef4444"}, 'steps': [{'range': [0, 1], 'color': '#fee2e2'}, {'range': [1, 2], 'color': '#dcfce7'}]}))
-        fig.update_layout(height=220, margin=dict(l=20, r=20, t=30, b=20))
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("""<div class="oi-card oi-red"><div class="oi-lbl">Call OI (Resist)</div><div class="oi-big">34.5 Cr</div><div>@ 25,000</div></div><div class="oi-card oi-green"><div class="oi-lbl">Put OI (Support)</div><div class="oi-big">21.2 Cr</div><div>@ 24,800</div></div>""", unsafe_allow_html=True)
-    with col_table:
-        oi_data = [
-            {"🟢 PUT OI": 10, "STRIKE": 24800, "🔴 CALL OI": 90, "TREND": "Resistance"},
-            {"🟢 PUT OI": 20, "STRIKE": 24850, "🔴 CALL OI": 80, "TREND": "Resistance"},
-            {"🟢 PUT OI": 30, "STRIKE": 24900, "🔴 CALL OI": 60, "TREND": "Weak"},
-            {"🟢 PUT OI": 50, "STRIKE": 24950, "🔴 CALL OI": 50, "TREND": "Fight"},
-            {"🟢 PUT OI": 70, "STRIKE": 25000, "🔴 CALL OI": 20, "TREND": "Support"},
-            {"🟢 PUT OI": 90, "STRIKE": 25050, "🔴 CALL OI": 10, "TREND": "Strong Support"},
-        ]
-        st.dataframe(pd.DataFrame(oi_data).style.map(color_signals, subset=['TREND']), use_container_width=True, hide_index=True, height=600,
-            column_config={"🟢 PUT OI": st.column_config.ProgressColumn("🟢 Put OI (Support)", format="%d L", min_value=0, max_value=150),
-                           "STRIKE": st.column_config.TextColumn("Strike", width="small"),
-                           "🔴 CALL OI": st.column_config.ProgressColumn("🔴 Call OI (Resist)", format="%d L", min_value=0, max_value=150)})
+if data is not None:
+    for s in STOCKS:
+        r = calculate_metrics(data, s)
+        if r:
+            rows.append(r)
 
-elif view == "Trade Flow":
-    st.markdown(f'<div class="header-card h-green"><span class="h-title">MARKET ROCKERS</span></div>', unsafe_allow_html=True)
-    st.info("High Volume Movers...")
-    st.markdown(f'<div class="header-card h-red"><span class="h-title">MARKET SHOCKERS</span></div>', unsafe_allow_html=True)
-    st.info("High Volume Losers...")
+df = pd.DataFrame(rows)
 
-elif view == "Stock-On":
-    st.markdown(f'<div class="header-card h-blue"><span class="h-title">STOCK-ON 52W</span></div>', unsafe_allow_html=True)
-    st.info("Breakouts...")
+# ===================== STOCK SIGNAL LOGIC (LIVE) =====================
+def stock_signal(row):
+    xf = float(row["X_FACTOR"].replace("x",""))
+    if row["CHANGE"] > 0.8 and xf >= 1.5:
+        return "🟢 STRONG BUY"
+    elif row["CHANGE"] < -0.8 and xf >= 1.5:
+        return "🔴 STRONG SELL"
+    elif xf >= 1.5:
+        return "🟡 WATCH"
+    else:
+        return ""
 
-elif view == "Swing Spectrum":
-    st.markdown(f'<div class="header-card h-blue"><span class="h-title">SWING SETUPS</span></div>', unsafe_allow_html=True)
-    st.info("Momentum Analysis...")
+if not df.empty:
+    df["STOCK_SIGNAL"] = df.apply(stock_signal, axis=1)
 
-elif view == "TradeX":
-    st.markdown(f'<div class="header-card h-blue"><span class="h-title">TRADEX SIGNALS</span></div>', unsafe_allow_html=True)
-    st.info("Generating Signals...")
+# ===================== STYLE =====================
+def style_df(df):
+    return (
+        df.style
+        .applymap(lambda x:"color:#2563eb;font-weight:700",subset=["SYMBOL"])
+        .applymap(lambda x:"color:green" if x>0 else "color:red",subset=["CHANGE"])
+        .applymap(
+            lambda x:"color:green;font-weight:700" if x>=70 else
+                     "color:orange;font-weight:700" if x>=40 else
+                     "color:red;font-weight:700",
+            subset=["CONFIDENCE"]
+        )
+        .format({"LTP":"₹{:.2f}","CHANGE":"{:+.2f}%","VOL":"{:,}"})
+    )
 
-elif view == "Trade Brahmand":
-    st.markdown(f'<div class="header-card h-green"><span class="h-title">SECTOR HEATMAP</span></div>', unsafe_allow_html=True)
-    sectors = [{"Name": "NIFTY BANK", "Val": "+0.45%"}, {"Name": "NIFTY IT", "Val": "+1.20%"}, {"Name": "NIFTY METAL", "Val": "-0.80%"}]
-    cols = st.columns(3)
-    for i, sec in enumerate(sectors):
-        col = cols[i % 3]
-        color_class = "m-delta-g" if "+" in sec['Val'] else "m-delta-r"
-        with col:
-            st.markdown(f"""<div class="sector-card"><div class="sec-name">{sec['Name']}</div><div style="color:{'#10b981' if '+' in sec['Val'] else '#ef4444'};font-weight:800;font-size:15px;">{sec['Val']}</div></div>""", unsafe_allow_html=True)
+# ===================== PAGES =====================
+if MENU == "Market Wise":
+    st.subheader("🚀 Market Wise")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("Gainers")
+        st.dataframe(style_df(df[df["CHANGE"] > 0]),
+                     use_container_width=True, hide_index=True)
+    with c2:
+        st.write("Losers")
+        st.dataframe(style_df(df[df["CHANGE"] < 0]),
+                     use_container_width=True, hide_index=True)
 
-elif view == "Index Mover":
-    st.markdown(f'<div class="header-card h-green"><span class="h-title">INDEX MOVERS</span></div>', unsafe_allow_html=True)
-    st.info("Pullers vs Draggers...")
+elif MENU == "Trade Flow":
+    st.subheader("🌊 Trade Flow (High Volume)")
+    st.dataframe(
+        style_df(df.sort_values("VOL", ascending=False)),
+        use_container_width=True,
+        hide_index=True
+    )
 
-if auto_ref:
-    tlib.sleep(refresh_rate)
-    st.rerun()
+elif MENU == "TradeX (Live Signals)":
+    st.subheader("📢 Live Stock Signals (Intraday)")
+    sig_df = df[df["STOCK_SIGNAL"] != ""]
+
+    if sig_df.empty:
+        st.info("⏳ No strong stock signal yet")
+    else:
+        st.dataframe(
+            style_df(sig_df),
+            use_container_width=True,
+            hide_index=True
+        )
+
+elif MENU == "Stock-On":
+    st.subheader("📌 Stock-On")
+    st.info("Breakout candidates (logic expandable)")
+
+elif MENU == "Swing Spectrum":
+    st.subheader("📈 Swing Spectrum")
+    st.info("Swing trend strength (coming soon)")
+
+elif MENU == "Option Clock":
+    st.subheader("🕒 Option Clock – Live Intraday Bias")
+
+    avg_change = df["CHANGE"].mean() if not df.empty else 0
+
+    if avg_change > 0.3:
+        bias = "🟢 BULLISH (Put Writing Likely)"
+        color = "#22c55e"
+    elif avg_change < -0.3:
+        bias = "🔴 BEARISH (Call Writing Likely)"
+        color = "#ef4444"
+    else:
+        bias = "🟡 SIDEWAYS / WAIT"
+        color = "#facc15"
+
+    st.markdown(
+        f"<h2 style='color:{color}'>{bias}</h2>",
+        unsafe_allow_html=True
+    )
+    st.caption("Based on live price behaviour (safe intraday proxy)")
+
+elif MENU == "Index Mover":
+    st.subheader("📊 Index Mover")
+    st.dataframe(
+        style_df(df.sort_values("CHANGE", ascending=False)),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ===================== AUTO REFRESH =====================
+if AUTO:
+    st_autorefresh(interval=INTERVAL * 1000, key="auto_refresh")
